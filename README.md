@@ -1,8 +1,8 @@
-# SSHClient
+# OnionSSH
 
 ## 简介
 
-SSHClient 是一个基于 Electron 构建的远程 SSH 客户端，旨在提供一个现代化且易于使用的界面来管理和连接到您的远程服务器。
+OnionSSH 是一个基于 Electron 构建的远程 SSH 客户端，旨在提供一个现代化且易于使用的界面来管理和连接到您的远程服务器。
 
 ## 功能特性
 
@@ -34,6 +34,7 @@ npm install
 ### 3. 运行开发版本
 
 ```bash
+npm run build
 npm start
 ```
 
