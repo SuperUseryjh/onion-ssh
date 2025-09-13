@@ -2,12 +2,13 @@ import React, { useState, useEffect, useRef, createRef } from 'react';
 import { Terminal } from 'xterm';
 import { FitAddon } from 'xterm-addon-fit';
 import 'xterm/css/xterm.css'; // Import xterm.css
-import { Layout, Menu, Button, Input, Form, List, Typography, Space, Tabs, message } from 'antd';
-import { PlusOutlined, EditOutlined, DeleteOutlined, PlayCircleOutlined } from '@ant-design/icons';
+import { Layout, Menu, Button, Input, Form, List, Typography, Space, Tabs, message, Select, Modal, Dropdown } from 'antd'; // Added Dropdown
+import { PlusOutlined, EditOutlined, DeleteOutlined, PlayCircleOutlined, SettingOutlined } from '@ant-design/icons';
 import 'antd/dist/reset.css'; // Import Ant Design styles
 
 const { Header, Sider, Content } = Layout;
 const { Title, Text } = Typography;
+const { Option } = Select; // Destructure Option from Select
 
 // 定义连接的结构
 interface Connection {
@@ -18,6 +19,9 @@ interface Connection {
   password?: string; // 如果以后使用密钥认证，密码可以是可选的
   port: number;
   privateKeyPath?: string; // 私钥文件路径
+  proxyType?: 'none' | 'socks5' | 'http'; // 代理类型
+  proxyHost?: string; // 代理主机
+  proxyPort?: number; // 代理端口
 }
 
 // 定义标签页的结构
@@ -46,6 +50,7 @@ const App: React.FC = () => {
   const [selectedConnectionId, setSelectedConnectionId] = useState<string | null>(null);
   const [form] = Form.useForm();
   const [isEditing, setIsEditing] = useState(false);
+  const [isModalVisible, setIsModalVisible] = useState(false); // 控制模态框可见性
   const [status, setStatus] = useState('');
   const [sidebarWidth, setSidebarWidth] = useState(300); // 侧边栏初始宽度
   const [isResizing, setIsResizing] = useState(false); // 是否正在调整大小
@@ -146,6 +151,7 @@ const App: React.FC = () => {
       const updatedConnections: Connection[] = await window.electron.invoke('save-connection', { ...values, id: selectedConnectionId });
       setConnections(updatedConnections);
       resetForm();
+      setIsModalVisible(false); // 关闭模态框
       message.success('连接已保存!');
     } catch (error) {
       console.error('保存连接失败:', error);
@@ -157,6 +163,7 @@ const App: React.FC = () => {
     form.setFieldsValue(connection);
     setSelectedConnectionId(connection.id || null);
     setIsEditing(true);
+    setIsModalVisible(true); // 打开模态框
   };
 
   const handleDeleteConnection = async (id: string) => {
@@ -178,10 +185,11 @@ const App: React.FC = () => {
     }
   };
 
+  // handleSelectConnection 不再直接用于列表项点击，但保留用于 tab bar 的“连接到选定服务器”按钮
   const handleSelectConnection = (connection: Connection) => {
     setSelectedConnectionId(connection.id || null);
-    form.setFieldsValue(connection);
-    setIsEditing(true);
+    // form.setFieldsValue(connection); // 不再需要在这里设置表单值
+    // setIsEditing(true); // 不再需要在这里设置编辑状态
   };
 
   const addTab = (connection: Connection) => {
@@ -224,6 +232,9 @@ const App: React.FC = () => {
           password: connection.password,
           port: connection.port,
           privateKeyPath: connection.privateKeyPath, // 传递私钥路径
+          proxyType: connection.proxyType, // 传递代理类型
+          proxyHost: connection.proxyHost, // 传递代理主机
+          proxyPort: connection.proxyPort, // 传递代理端口
         });
       }
     }, 0);
@@ -254,7 +265,7 @@ const App: React.FC = () => {
 
   const handleConnectToSelected = () => {
     if (!selectedConnectionId) {
-      message.warning('请先选择一个连接。');
+      message.warning('请先选择一个连接或双击列表中的连接。');
       return;
     }
     const connectionToConnect = connections.find(conn => conn.id === selectedConnectionId);
@@ -278,6 +289,36 @@ const App: React.FC = () => {
     setIsEditing(false);
   };
 
+  const showModal = () => {
+    resetForm(); // 每次打开模态框时重置表单
+    setIsModalVisible(true);
+  };
+
+  const handleModalCancel = () => {
+    setIsModalVisible(false);
+    resetForm();
+  };
+
+  const proxyType = Form.useWatch('proxyType', form); // 监听 proxyType 字段的变化
+
+  // 右键菜单
+  const getContextMenu = (connection: Connection) => (
+    <Menu onClick={({ key }) => {
+      if (key === 'edit') {
+        handleEditConnection(connection);
+      } else if (key === 'delete') {
+        handleDeleteConnection(connection.id!);
+      }
+    }}>
+      <Menu.Item key="edit" icon={<EditOutlined />}>
+        编辑
+      </Menu.Item>
+      <Menu.Item key="delete" icon={<DeleteOutlined />} danger>
+        删除
+      </Menu.Item>
+    </Menu>
+  );
+
   return (
     <Layout style={{ minHeight: '100vh' }}>
       <Sider
@@ -295,65 +336,102 @@ const App: React.FC = () => {
       >
         <div style={{ padding: '20px' }}>
           <Title level={4}>连接管理</Title>
-          <Form
-            form={form}
-            layout="vertical"
-            onFinish={handleSaveConnection}
-            initialValues={{ port: 22 }}
+          <Button
+            type="primary"
+            icon={<PlusOutlined />}
+            onClick={showModal}
+            style={{ marginBottom: '20px', width: '100%' }}
           >
-            <Form.Item
-              name="name"
-              label="连接名称"
-              rules={[{ required: true, message: '请输入连接名称!' }]}
+            添加新连接
+          </Button>
+
+          <Modal
+            title={isEditing ? '编辑连接' : '添加新连接'}
+            open={isModalVisible}
+            onOk={() => form.submit()} // 提交表单
+            onCancel={handleModalCancel}
+            destroyOnClose={true} // 关闭时销毁子组件，确保表单重置
+          >
+            <Form
+              form={form}
+              layout="vertical"
+              onFinish={handleSaveConnection}
+              initialValues={{ port: 22, proxyType: 'none' }} // 默认代理类型为 'none'
             >
-              <Input placeholder="连接名称" />
-            </Form.Item>
-            <Form.Item
-              name="host"
-              label="主机"
-              rules={[{ required: true, message: '请输入主机地址!' }]}
-            >
-              <Input placeholder="主机" />
-            </Form.Item>
-            <Form.Item
-              name="username"
-              label="用户名"
-              rules={[{ required: true, message: '请输入用户名!' }]}
-            >
-              <Input placeholder="用户名" />
-            </Form.Item>
-            <Form.Item
-              name="password"
-              label="密码"
-            >
-              <Input.Password placeholder="密码 (如果使用密码认证)" />
-            </Form.Item>
-            <Form.Item
-              name="privateKeyPath"
-              label="私钥文件路径"
-            >
-              <Input placeholder="私钥文件路径 (如果使用证书认证)" />
-            </Form.Item>
-            <Form.Item
-              name="port"
-              label="端口"
-              rules={[{ required: true, message: '请输入端口号!' }]}
-            >
-              <Input type="number" placeholder="端口" />
-            </Form.Item>
-            <Form.Item>
-              <Space>
-                <Button type="primary" htmlType="submit" icon={<PlusOutlined />}>
-                  {isEditing ? '更新连接' : '添加连接'}
-                </Button>
-                {isEditing && (
-                  <Button onClick={resetForm}>
-                    取消编辑
-                  </Button>
-                )}
-              </Space>
-            </Form.Item>
-          </Form>
+              <Form.Item
+                name="name"
+                label="连接名称"
+                rules={[{ required: true, message: '请输入连接名称!' }]}
+              >
+                <Input placeholder="连接名称" />
+              </Form.Item>
+              <Form.Item
+                name="host"
+                label="主机"
+                rules={[{ required: true, message: '请输入主机地址!' }]}
+              >
+                <Input placeholder="主机" />
+              </Form.Item>
+              <Form.Item
+                name="username"
+                label="用户名"
+                rules={[{ required: true, message: '请输入用户名!' }]}
+              >
+                <Input placeholder="用户名" />
+              </Form.Item>
+              <Form.Item
+                name="password"
+                label="密码"
+              >
+                <Input.Password placeholder="密码 (如果使用密码认证)" />
+              </Form.Item>
+              <Form.Item
+                name="privateKeyPath"
+                label="私钥文件路径"
+              >
+                <Input placeholder="私钥文件路径 (如果使用证书认证)" />
+              </Form.Item>
+              <Form.Item
+                name="port"
+                label="端口"
+                rules={[{ required: true, message: '请输入端口号!' }]}
+              >
+                <Input type="number" placeholder="端口" />
+              </Form.Item>
+
+              {/* 代理设置 */}
+              <Title level={5} style={{ marginTop: '20px' }}>代理设置</Title>
+              <Form.Item
+                name="proxyType"
+                label="代理类型"
+              >
+                <Select>
+                  <Option value="none">无代理</Option>
+                  <Option value="socks5">SOCKS5</Option>
+                  <Option value="http">HTTP</Option>
+                </Select>
+              </Form.Item>
+
+              {proxyType !== 'none' && (
+                <>
+                  <Form.Item
+                    name="proxyHost"
+                    label="代理主机"
+                    rules={[{ required: true, message: '请输入代理主机地址!' }]}
+                  >
+                    <Input placeholder="代理主机" />
+                  </Form.Item>
+                  <Form.Item
+                    name="proxyPort"
+                    label="代理端口"
+                    rules={[{ required: true, message: '请输入代理端口号!' }]}
+                  >
+                    <Input type="number" placeholder="代理端口" />
+                  </Form.Item>
+                </>
+              )}
+            </Form>
+          </Modal>
 
           <Title level={5} style={{ marginTop: '20px' }}>已保存连接</Title>
           {connections.length === 0 ? (
@@ -363,44 +441,23 @@ const App: React.FC = () => {
               itemLayout="horizontal"
               dataSource={connections}
               renderItem={(conn) => (
-                <List.Item
-                  actions={[
-                    <Button
-                      type={selectedConnectionId === conn.id ? 'primary' : 'default'}
-                      icon={<PlayCircleOutlined />}
-                      onClick={() => handleSelectConnection(conn)}
-                      size="small"
-                    >
-                      选择
-                    </Button>,
-                    <Button
-                      icon={<EditOutlined />}
-                      onClick={() => handleEditConnection(conn)}
-                      size="small"
-                    >
-                      编辑
-                    </Button>,
-                    <Button
-                      danger
-                      icon={<DeleteOutlined />}
-                      onClick={() => handleDeleteConnection(conn.id!)}
-                      size="small"
-                    >
-                      删除
-                    </Button>,
-                  ]}
-                  style={{
-                    border: selectedConnectionId === conn.id ? '1px solid #1890ff' : '1px solid #f0f0f0',
-                    borderRadius: '4px',
-                    marginBottom: '8px',
-                    padding: '12px',
-                  }}
-                >
-                  <List.Item.Meta
-                    title={<Text strong>{conn.name}</Text>}
-                    description={`${conn.host}:${conn.port}`}
-                  />
-                </List.Item>
+                <Dropdown overlay={getContextMenu(conn)} trigger={['contextMenu']}>
+                  <List.Item
+                    onDoubleClick={() => addTab(conn)} // 双击打开新标签页
+                    style={{
+                      border: '1px solid #f0f0f0',
+                      borderRadius: '4px',
+                      marginBottom: '8px',
+                      padding: '12px',
+                      cursor: 'pointer',
+                    }}
+                  >
+                    <List.Item.Meta
+                      title={<Text strong>{conn.name}</Text>}
+                      description={`${conn.host}:${conn.port} ${conn.proxyType && conn.proxyType !== 'none' ? `(代理: ${conn.proxyType} ${conn.proxyHost}:${conn.proxyPort})` : ''}`}
+                    />
+                  </List.Item>
+                </Dropdown>
               )}
             />
           )}
@@ -452,13 +509,13 @@ const App: React.FC = () => {
                 disabled={!selectedConnectionId}
                 icon={<PlayCircleOutlined />}
               >
-                连接到选定服务器
+                连接到已选服务器
               </Button>
             }
           />
           {tabs.length === 0 && (
             <div style={{ textAlign: 'center', padding: '50px' }}>
-              <Text type="secondary">请选择一个连接并点击“连接到选定服务器”来打开一个终端标签页。</Text>
+              <Text type="secondary">请双击列表中的连接来打开一个终端标签页，或选择一个连接后点击“连接到已选服务器”按钮。</Text>
             </div>
           )}
         </Content>

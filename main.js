@@ -5,6 +5,8 @@ const fs = require('fs').promises; // Import fs.promises for async file operatio
 const { NodeSSH } = require('node-ssh');
 const Store = require('electron-store').default; // Import electron-store
 const { v4: uuidv4 } = require('uuid'); // For generating unique IDs for connections
+const { SocksProxyAgent } = require('socks-proxy-agent'); // Import SocksProxyAgent
+const { HttpsProxyAgent } = require('https-proxy-agent'); // Import HttpsProxyAgent
 
 const store = new Store({ name: 'ssh-connections' }); // Create a store instance
 
@@ -81,6 +83,17 @@ function createWindow() {
         port: config.port || 22,
         strictHostKeyChecking: false,
       };
+
+      // Handle proxy configuration
+      if (config.proxyType && config.proxyType !== 'none' && config.proxyHost && config.proxyPort) {
+        const proxyUrl = `${config.proxyType}://${config.proxyHost}:${config.proxyPort}`;
+        console.log(`Using proxy: ${proxyUrl}`);
+        if (config.proxyType === 'socks5') {
+          sshConfig.agent = new SocksProxyAgent(proxyUrl);
+        } else if (config.proxyType === 'http') {
+          sshConfig.agent = new HttpsProxyAgent(proxyUrl);
+        }
+      }
 
       if (config.privateKeyPath) {
         try {
