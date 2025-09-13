@@ -33,6 +33,7 @@ interface Tab {
   termInstance: Terminal | null;
   fitAddonInstance: FitAddon | null;
   status: string;
+  hideLoadingMessage?: () => void; // 用于关闭 Ant Design message 的函数
 }
 
 declare global {
@@ -112,18 +113,38 @@ const App: React.FC = () => {
       const termInstance = activeTab.termInstance;
 
       const cleanupConnected = window.electron.receive('ssh-connected', (message: string) => {
-        setTabs(prevTabs => prevTabs.map(tab => tab.id === activeTabId ? { ...tab, status: message } : tab));
+        setTabs(prevTabs => {
+          const currentActiveTab = prevTabs.find(tab => tab.id === activeTabId);
+          if (currentActiveTab?.hideLoadingMessage) {
+            currentActiveTab.hideLoadingMessage();
+            message.success('连接成功!', 3);
+          }
+          return prevTabs.map(tab => tab.id === activeTabId ? { ...tab, status: message } : tab);
+        });
         termInstance.write(`\r\n${message}\r\n`);
       });
       const cleanupDisconnected = window.electron.receive('ssh-disconnected', (message: string) => {
-        setTabs(prevTabs => prevTabs.map(tab => tab.id === activeTabId ? { ...tab, status: message } : tab));
+        setTabs(prevTabs => {
+          const currentActiveTab = prevTabs.find(tab => tab.id === activeTabId);
+          if (currentActiveTab?.hideLoadingMessage) {
+            currentActiveTab.hideLoadingMessage();
+          }
+          return prevTabs.map(tab => tab.id === activeTabId ? { ...tab, status: message } : tab);
+        });
         termInstance.write(`\r\n${message}\r\n`);
       });
       const cleanupOutput = window.electron.receive('ssh-output', (data: string) => {
         termInstance.write(data);
       });
       const cleanupError = window.electron.receive('ssh-error', (error: string) => {
-        setTabs(prevTabs => prevTabs.map(tab => tab.id === activeTabId ? { ...tab, status: `错误: ${error}` } : tab));
+        setTabs(prevTabs => {
+          const currentActiveTab = prevTabs.find(tab => tab.id === activeTabId);
+          if (currentActiveTab?.hideLoadingMessage) {
+            currentActiveTab.hideLoadingMessage();
+            message.error('连接失败!', 3);
+          }
+          return prevTabs.map(tab => tab.id === activeTabId ? { ...tab, status: `错误: ${error}` } : tab);
+        });
         termInstance.write(`\r\n错误: ${error}\r\n`);
       });
 
@@ -224,7 +245,8 @@ const App: React.FC = () => {
         });
 
         // 立即尝试连接
-        message.loading('正在连接...', 0);
+        const hide = message.loading('正在连接...', 0);
+        setTabs(prevTabs => prevTabs.map(tab => tab.id === newTabId ? { ...tab, hideLoadingMessage: hide } : tab));
         newTermInstance.reset();
         window.electron.send('connect-ssh', {
           host: connection.host,
