@@ -1,11 +1,12 @@
 (function () {
   const { contextBridge, ipcRenderer } = require('electron');
+  console.log('Preload script loaded.');
 
   contextBridge.exposeInMainWorld(
     'electron',
     {
       send: (channel, data) => {
-        let validChannels = ['connect-ssh', 'ssh-input']; // List of channels you want to allow from renderer to main
+        let validChannels = ['connect-ssh', 'ssh-input', 'connect-wsl', 'connect-powershell', 'connect-cmd']; // List of channels you want to allow from renderer to main
         if (validChannels.includes(channel)) {
           ipcRenderer.send(channel, data);
         }
@@ -20,11 +21,15 @@
         return () => {}; // Return a no-op function if channel is not valid
       },
       invoke: (channel, ...args) => {
-        let validChannels = ['get-connections', 'save-connection', 'delete-connection', 'read-file']; // List of channels you want to allow from renderer to main (invoke)
+        let validChannels = ['get-connections', 'save-connection', 'delete-connection', 'read-file', 'clipboard-read-text', 'clipboard-write-text']; // Remove WSL channels
         if (validChannels.includes(channel)) {
           return ipcRenderer.invoke(channel, ...args);
         }
         return Promise.reject('Invalid IPC channel');
+      },
+      clipboard: {
+        readText: () => ipcRenderer.invoke('clipboard-read-text'),
+        writeText: (text) => ipcRenderer.invoke('clipboard-write-text', text),
       }
     }
   );

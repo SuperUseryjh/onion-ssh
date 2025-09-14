@@ -1,8 +1,10 @@
 const { app, BrowserWindow, ipcMain, Menu } = require('electron'); // Import Menu
+const { exec, spawn } = require('child_process'); // Import child_process for executing shell commands
 const path = require('path');
 const url = require('url'); // Import url module
 const fs = require('fs').promises; // Import fs.promises for async file operations
 const { NodeSSH } = require('node-ssh');
+const iconv = require('iconv-lite'); // Import iconv-lite
 const Store = require('electron-store').default; // Import electron-store
 const { v4: uuidv4 } = require('uuid'); // For generating unique IDs for connections
 const { SocksProxyAgent } = require('socks-proxy-agent'); // Import SocksProxyAgent
@@ -33,6 +35,8 @@ function createWindow() {
 
   let currentSSH = null; // To store the active SSH connection
   let currentShell = null; // To store the active SSH shell
+  let currentPowershellProcess = null; // To store the active PowerShell process
+  let currentCmdProcess = null; // To store the active CMD process
 
   // IPC handlers for connection management
   ipcMain.handle('get-connections', () => {
@@ -71,97 +75,127 @@ function createWindow() {
     }
   });
 
+  // IPC handlers for clipboard operations
+  ipcMain.handle('clipboard-read-text', () => {
+    const { clipboard } = require('electron');
+    return clipboard.readText();
+  });
+
+  ipcMain.handle('clipboard-write-text', (event, text) => {
+    const { clipboard } = require('electron');
+    clipboard.writeText(text);
+  });
+
   ipcMain.on('connect-ssh', async (event, config) => {
     const ssh = new NodeSSH();
-
     try {
-      console.log('Attempting to connect SSH with config:', config);
+      console.log('Attempting to connect to PowerShell');
 
-      const sshConfig = {
-        host: config.host,
-        username: config.username,
-        port: config.port || 22,
-        strictHostKeyChecking: false,
-      };
-
-      // Handle proxy configuration
-      if (config.proxyType && config.proxyType !== 'none' && config.proxyHost && config.proxyPort) {
-        const proxyUrl = `${config.proxyType}://${config.proxyHost}:${config.proxyPort}`;
-        console.log(`Using proxy: ${proxyUrl}`);
-        if (config.proxyType === 'socks5') {
-          sshConfig.agent = new SocksProxyAgent(proxyUrl);
-        } else if (config.proxyType === 'http') {
-          sshConfig.agent = new HttpsProxyAgent(proxyUrl);
-        }
+      if (currentPowershellProcess) {
+        currentPowershellProcess.kill();
+        currentPowershellProcess = null;
       }
 
-      if (config.privateKeyPath) {
-        try {
-          sshConfig.privateKey = await fs.readFile(config.privateKeyPath, 'utf8');
-          console.log('Using private key for authentication.');
-        } catch (error) {
-          console.error('Failed to read private key file:', error);
-          throw new Error(`Failed to read private key file: ${error.message}`);
-        }
-      } else if (config.password) {
-        sshConfig.password = config.password;
-        sshConfig.authMethods = ['password', 'keyboard-interactive'];
-        sshConfig.keyboardInteractive = (name, instructions, lang, prompts, finish) => {
-          if (prompts.length > 0 && prompts[0].prompt.toLowerCase().includes('password')) {
-            return finish([config.password]);
-          }
-          return finish([]);
-        };
-        console.log('Using password for authentication.');
-      } else {
-        throw new Error('No authentication method (password or private key) provided.');
-      }
+      const powershellProcess = spawn('powershell.exe', []);
+      currentPowershellProcess = powershellProcess;
 
-      await ssh.connect(sshConfig);
-      console.log('SSH connection successful!');
-      currentSSH = ssh; // Store the active SSH connection
-      event.sender.send('ssh-connected', 'SSH connection established.');
-
-      const shell = await ssh.requestShell();
-      currentShell = shell; // Store the active shell
-
-      shell.on('data', (data) => {
-        event.sender.send('ssh-output', data.toString());
+      powershellProcess.stdout.on('data', (data) => {
+        event.sender.send('ssh-output', iconv.decode(data, 'gbk'));
       });
 
-      shell.on('close', () => {
-        event.sender.send('ssh-disconnected', 'SSH connection closed.');
-        currentSSH = null;
-        currentShell = null; // Clear current shell
-        if (ssh && ssh.isConnected()) {
-          ssh.dispose();
-        }
+      powershellProcess.stderr.on('data', (data) => {
+        event.sender.send('ssh-error', iconv.decode(data, 'gbk'));
       });
 
-      // Handle window close to dispose SSH connection
-      mainWindow.on('closed', () => {
-        if (currentSSH) {
-          currentSSH.dispose();
-          currentSSH = null;
-        }
-        currentShell = null; // Clear current shell
+      powershellProcess.on('close', (code) => {
+        console.log(`PowerShell process exited with code ${code}`);
+        event.sender.send('ssh-disconnected', `PowerShell connection closed with code ${code}.`);
+        currentPowershellProcess = null;
       });
+
+      powershellProcess.on('error', (err) => {
+        console.error('Failed to start PowerShell process:', err);
+        event.sender.send('ssh-error', `Failed to start PowerShell: ${err.message}`);
+        currentPowershellProcess = null;
+      });
+
+      event.sender.send('ssh-connected', 'Connected to PowerShell');
 
     } catch (error) {
-      console.error('SSH Connection Error in catch block:', error); // Log full error to main process console
-      event.sender.send('ssh-error', error.message); // Send only message to renderer
-      if (currentSSH) {
-        currentSSH.dispose();
-        currentSSH = null;
+      console.error('PowerShell Connection Error:', error);
+      event.sender.send('ssh-error', error.message);
+      if (currentPowershellProcess) {
+        currentPowershellProcess.kill();
+        currentPowershellProcess = null;
       }
-      currentShell = null; // Clear current shell
+    }
+  });
+
+  // IPC handler to connect to CMD
+  ipcMain.on('connect-cmd', async (event) => {
+    try {
+      console.log('Attempting to connect to CMD');
+
+      if (currentCmdProcess) {
+        currentCmdProcess.kill();
+        currentCmdProcess = null;
+      }
+
+      const cmdProcess = spawn('cmd.exe', []);
+      currentCmdProcess = cmdProcess;
+
+      cmdProcess.stdout.on('data', (data) => {
+        event.sender.send('ssh-output', iconv.decode(data, 'gbk'));
+      });
+
+      cmdProcess.stderr.on('data', (data) => {
+        event.sender.send('ssh-error', iconv.decode(data, 'gbk'));
+      });
+
+      cmdProcess.on('close', (code) => {
+        console.log(`CMD process exited with code ${code}`);
+        event.sender.send('ssh-disconnected', `CMD connection closed with code ${code}.`);
+        currentCmdProcess = null;
+      });
+
+      cmdProcess.on('error', (err) => {
+        console.error('Failed to start CMD process:', err);
+        event.sender.send('ssh-error', `Failed to start CMD: ${err.message}`);
+        currentCmdProcess = null;
+      });
+
+      event.sender.send('ssh-connected', 'Connected to CMD');
+
+    } catch (error) {
+      console.error('CMD Connection Error:', error);
+      event.sender.send('ssh-error', error.message);
+      if (currentCmdProcess) {
+        currentCmdProcess.kill();
+        currentCmdProcess = null;
+      }
     }
   });
 
   // Register ssh-input listener once outside the connect-ssh handler
   ipcMain.on('ssh-input', (event, data) => {
+    let processedData = data;
+
+    // Check if the input is the xterm.js backspace character (DEL)
+    // and if the target is CMD or PowerShell, convert it to BS.
+    if (data === '\x7F') { // DEL character
+      if (currentPowershellProcess || currentCmdProcess) {
+        processedData = '\x08'; // BS character
+      }
+    }
+
     if (currentShell && currentShell.writable) {
-      currentShell.write(data);
+      currentShell.write(processedData);
+    } else if (currentWslProcess && currentWslProcess.stdin.writable) {
+      currentWslProcess.stdin.write(processedData);
+    } else if (currentPowershellProcess && currentPowershellProcess.stdin.writable) {
+      currentPowershellProcess.stdin.write(processedData);
+    } else if (currentCmdProcess && currentCmdProcess.stdin.writable) {
+      currentCmdProcess.stdin.write(processedData);
     }
   });
 }

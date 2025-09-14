@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef, createRef } from 'react';
 import { Terminal } from 'xterm';
 import { FitAddon } from 'xterm-addon-fit';
 import 'xterm/css/xterm.css'; // Import xterm.css
-import { Layout, Menu, Button, Input, Form, List, Typography, Space, Tabs, message, Select, Modal, Dropdown } from 'antd'; // Added Dropdown
+import { Layout, Menu, Button, Input, Form, List, Typography, Space, Tabs, message, Select, Modal, Dropdown, App as AntdApp } from 'antd'; // Added Dropdown, AntdApp
 import { PlusOutlined, EditOutlined, DeleteOutlined, PlayCircleOutlined, SettingOutlined } from '@ant-design/icons';
 import 'antd/dist/reset.css'; // Import Ant Design styles
 
@@ -42,11 +42,17 @@ declare global {
       send: (channel: string, data: any) => void;
       receive: (channel: string, func: (...args: any[]) => void) => () => void; // receive现在返回一个清理函数
       invoke: (channel: string, ...args: any[]) => Promise<any>; // 添加invoke方法
+      clipboard: {
+        readText: () => Promise<string>;
+        writeText: (text: string) => void;
+      };
     };
   }
 }
 
 const App: React.FC = () => {
+  const [messageApi, contextHolder] = message.useMessage(); // 使用 useMessage 钩子
+
   const [connections, setConnections] = useState<Connection[]>([]);
   const [selectedConnectionId, setSelectedConnectionId] = useState<string | null>(null);
   const [form] = Form.useForm();
@@ -117,7 +123,7 @@ const App: React.FC = () => {
           const currentActiveTab = prevTabs.find(tab => tab.id === activeTabId);
           if (currentActiveTab?.hideLoadingMessage) {
             currentActiveTab.hideLoadingMessage();
-            message.success('连接成功!', 3);
+            messageApi.success('连接成功!', 3);
           }
           return prevTabs.map(tab => tab.id === activeTabId ? { ...tab, status: message } : tab);
         });
@@ -141,7 +147,7 @@ const App: React.FC = () => {
           const currentActiveTab = prevTabs.find(tab => tab.id === activeTabId);
           if (currentActiveTab?.hideLoadingMessage) {
             currentActiveTab.hideLoadingMessage();
-            message.error('连接失败!', 3);
+            messageApi.error('连接失败!', 3);
           }
           return prevTabs.map(tab => tab.id === activeTabId ? { ...tab, status: `错误: ${error}` } : tab);
         });
@@ -163,7 +169,7 @@ const App: React.FC = () => {
       setConnections(loadedConnections);
     } catch (error) {
       console.error('加载连接失败:', error);
-      message.error('加载连接失败。');
+      messageApi.error('加载连接失败。');
     }
   };
 
@@ -173,10 +179,10 @@ const App: React.FC = () => {
       setConnections(updatedConnections);
       resetForm();
       setIsModalVisible(false); // 关闭模态框
-      message.success('连接已保存!');
+      messageApi.success('连接已保存!');
     } catch (error) {
       console.error('保存连接失败:', error);
-      message.error('保存连接失败。');
+      messageApi.error('保存连接失败。');
     }
   };
 
@@ -191,7 +197,7 @@ const App: React.FC = () => {
     try {
       const updatedConnections: Connection[] = await window.electron.invoke('delete-connection', id);
       setConnections(updatedConnections);
-      message.success('连接已删除!');
+      messageApi.success('连接已删除!');
       if (selectedConnectionId === id) {
         resetForm();
       }
@@ -245,7 +251,7 @@ const App: React.FC = () => {
         });
 
         // 立即尝试连接
-        const hide = message.loading('正在连接...', 0);
+        const hide = messageApi.loading('正在连接...', 0);
         setTabs(prevTabs => prevTabs.map(tab => tab.id === newTabId ? { ...tab, hideLoadingMessage: hide } : tab));
         newTermInstance.reset();
         window.electron.send('connect-ssh', {
@@ -258,6 +264,82 @@ const App: React.FC = () => {
           proxyHost: connection.proxyHost, // 传递代理主机
           proxyPort: connection.proxyPort, // 传递代理端口
         });
+      }
+    }, 0);
+  };
+
+  const addPowershellTab = () => {
+    const newTabId = `powershell-tab-${Date.now()}`;
+    const newTerminalRef = createRef<HTMLDivElement>();
+    const newTermInstance = new Terminal();
+    const newFitAddonInstance = new FitAddon();
+
+    setTabs(prevTabs => [
+      ...prevTabs,
+      {
+        id: newTabId,
+        name: 'PowerShell',
+        connectionId: 'powershell',
+        terminalRef: newTerminalRef,
+        termInstance: newTermInstance,
+        fitAddonInstance: newFitAddonInstance,
+        status: '正在连接 PowerShell...',
+      }
+    ]);
+    setActiveTabId(newTabId);
+
+    setTimeout(() => {
+      if (newTerminalRef.current) {
+        newTermInstance.loadAddon(newFitAddonInstance);
+        newTermInstance.open(newTerminalRef.current);
+        newFitAddonInstance.fit();
+
+        newTermInstance.onData((data) => {
+          window.electron.send('ssh-input', data); // 暂时复用 ssh-input
+        });
+
+        const hide = messageApi.loading('正在连接 PowerShell...', 0);
+        setTabs(prevTabs => prevTabs.map(tab => tab.id === newTabId ? { ...tab, hideLoadingMessage: hide } : tab));
+        newTermInstance.reset();
+        window.electron.send('connect-powershell');
+      }
+    }, 0);
+  };
+
+  const addCmdTab = () => {
+    const newTabId = `cmd-tab-${Date.now()}`;
+    const newTerminalRef = createRef<HTMLDivElement>();
+    const newTermInstance = new Terminal();
+    const newFitAddonInstance = new FitAddon();
+
+    setTabs(prevTabs => [
+      ...prevTabs,
+      {
+        id: newTabId,
+        name: 'CMD',
+        connectionId: 'cmd',
+        terminalRef: newTerminalRef,
+        termInstance: newTermInstance,
+        fitAddonInstance: newFitAddonInstance,
+        status: '正在连接 CMD...',
+      }
+    ]);
+    setActiveTabId(newTabId);
+
+    setTimeout(() => {
+      if (newTerminalRef.current) {
+        newTermInstance.loadAddon(newFitAddonInstance);
+        newTermInstance.open(newTerminalRef.current);
+        newFitAddonInstance.fit();
+
+        newTermInstance.onData((data) => {
+          window.electron.send('ssh-input', data); // 暂时复用 ssh-input
+        });
+
+        const hide = messageApi.loading('正在连接 CMD...', 0);
+        setTabs(prevTabs => prevTabs.map(tab => tab.id === newTabId ? { ...tab, hideLoadingMessage: hide } : tab));
+        newTermInstance.reset();
+        window.electron.send('connect-cmd');
       }
     }, 0);
   };
@@ -321,6 +403,30 @@ const App: React.FC = () => {
     resetForm();
   };
 
+  const handleCopy = (termInstance: Terminal | null) => {
+    console.log('handleCopy called');
+    if (termInstance) {
+      const selectedText = termInstance.getSelection();
+      console.log('Selected text:', selectedText);
+      if (selectedText) {
+        window.electron.clipboard.writeText(selectedText);
+        messageApi.success('已复制到剪贴板!');
+      } else {
+        messageApi.warning('请先选择要复制的文本。');
+      }
+    }
+  };
+
+  const handlePaste = async (termInstance: Terminal | null) => {
+    if (termInstance) {
+      const text = await window.electron.clipboard.readText();
+      if (text) {
+        window.electron.send('ssh-input', text);
+        messageApi.success('已从剪贴板粘贴!');
+      }
+    }
+  };
+
   const proxyType = Form.useWatch('proxyType', form); // 监听 proxyType 字段的变化
 
   // 右键菜单
@@ -342,207 +448,235 @@ const App: React.FC = () => {
   );
 
   return (
-    <Layout style={{ minHeight: '100vh' }}>
-      <Sider
-        width={sidebarWidth}
-        theme="light"
-        style={{
-          overflow: 'auto',
-          height: '100vh',
-          position: 'fixed',
-          left: 0,
-          top: 0,
-          bottom: 0,
-          borderRight: '1px solid #f0f0f0',
-        }}
-      >
-        <div style={{ padding: '20px' }}>
-          <Title level={4}>连接管理</Title>
-          <Button
-            type="primary"
-            icon={<PlusOutlined />}
-            onClick={showModal}
-            style={{ marginBottom: '20px', width: '100%' }}
-          >
-            添加新连接
-          </Button>
-
-          <Modal
-            title={isEditing ? '编辑连接' : '添加新连接'}
-            open={isModalVisible}
-            onOk={() => form.submit()} // 提交表单
-            onCancel={handleModalCancel}
-            destroyOnClose={true} // 关闭时销毁子组件，确保表单重置
-          >
-            <Form
-              form={form}
-              layout="vertical"
-              onFinish={handleSaveConnection}
-              initialValues={{ port: 22, proxyType: 'none' }} // 默认代理类型为 'none'
+    <AntdApp>
+      {contextHolder}
+      <Layout style={{ minHeight: '100vh' }}>
+        <Sider
+          width={sidebarWidth}
+          theme="light"
+          style={{
+            overflow: 'auto',
+            height: '100vh',
+            position: 'fixed',
+            left: 0,
+            top: 0,
+            bottom: 0,
+            borderRight: '1px solid #f0f0f0',
+          }}
+        >
+          <div style={{ padding: '20px' }}>
+            <Title level={4}>连接管理</Title>
+            <Button
+              type="primary"
+              icon={<PlusOutlined />}
+              onClick={showModal}
+              style={{ marginBottom: '20px', width: '100%' }}
             >
-              <Form.Item
-                name="name"
-                label="连接名称"
-                rules={[{ required: true, message: '请输入连接名称!' }]}
-              >
-                <Input placeholder="连接名称" />
-              </Form.Item>
-              <Form.Item
-                name="host"
-                label="主机"
-                rules={[{ required: true, message: '请输入主机地址!' }]}
-              >
-                <Input placeholder="主机" />
-              </Form.Item>
-              <Form.Item
-                name="username"
-                label="用户名"
-                rules={[{ required: true, message: '请输入用户名!' }]}
-              >
-                <Input placeholder="用户名" />
-              </Form.Item>
-              <Form.Item
-                name="password"
-                label="密码"
-              >
-                <Input.Password placeholder="密码 (如果使用密码认证)" />
-              </Form.Item>
-              <Form.Item
-                name="privateKeyPath"
-                label="私钥文件路径"
-              >
-                <Input placeholder="私钥文件路径 (如果使用证书认证)" />
-              </Form.Item>
-              <Form.Item
-                name="port"
-                label="端口"
-                rules={[{ required: true, message: '请输入端口号!' }]}
-              >
-                <Input type="number" placeholder="端口" />
-              </Form.Item>
+              添加新连接
+            </Button>
 
-              {/* 代理设置 */}
-              <Title level={5} style={{ marginTop: '20px' }}>代理设置</Title>
-              <Form.Item
-                name="proxyType"
-                label="代理类型"
+            <Modal
+              title={isEditing ? '编辑连接' : '添加新连接'}
+              open={isModalVisible}
+              onOk={() => form.submit()} // 提交表单
+              onCancel={handleModalCancel}
+              destroyOnClose={true} // 关闭时销毁子组件，确保表单重置
+            >
+              <Form
+                form={form}
+                layout="vertical"
+                onFinish={handleSaveConnection}
+                initialValues={{ port: 22, proxyType: 'none' }} // 默认代理类型为 'none'
               >
-                <Select>
-                  <Option value="none">无代理</Option>
-                  <Option value="socks5">SOCKS5</Option>
-                  <Option value="http">HTTP</Option>
-                </Select>
-              </Form.Item>
+                <Form.Item
+                  name="name"
+                  label="连接名称"
+                  rules={[{ required: true, message: '请输入连接名称!' }]}
+                >
+                  <Input placeholder="连接名称" />
+                </Form.Item>
+                <Form.Item
+                  name="host"
+                  label="主机"
+                  rules={[{ required: true, message: '请输入主机地址!' }]}
+                >
+                  <Input placeholder="主机" />
+                </Form.Item>
+                <Form.Item
+                  name="username"
+                  label="用户名"
+                  rules={[{ required: true, message: '请输入用户名!' }]}
+                >
+                  <Input placeholder="用户名" />
+                </Form.Item>
+                <Form.Item
+                  name="password"
+                  label="密码"
+                >
+                  <Input.Password placeholder="密码 (如果使用密码认证)" />
+                </Form.Item>
+                <Form.Item
+                  name="privateKeyPath"
+                  label="私钥文件路径"
+                >
+                  <Input placeholder="私钥文件路径 (如果使用证书认证)" />
+                </Form.Item>
+                <Form.Item
+                  name="port"
+                  label="端口"
+                  rules={[{ required: true, message: '请输入端口号!' }]}
+                >
+                  <Input type="number" placeholder="端口" />
+                </Form.Item>
 
-              {proxyType !== 'none' && (
-                <>
-                  <Form.Item
-                    name="proxyHost"
-                    label="代理主机"
-                    rules={[{ required: true, message: '请输入代理主机地址!' }]}
-                  >
-                    <Input placeholder="代理主机" />
-                  </Form.Item>
-                  <Form.Item
-                    name="proxyPort"
-                    label="代理端口"
-                    rules={[{ required: true, message: '请输入代理端口号!' }]}
-                  >
-                    <Input type="number" placeholder="代理端口" />
-                  </Form.Item>
-                </>
-              )}
-            </Form>
-          </Modal>
+                {/* 代理设置 */}
+                <Title level={5} style={{ marginTop: '20px' }}>代理设置</Title>
+                <Form.Item
+                  name="proxyType"
+                  label="代理类型"
+                >
+                  <Select>
+                    <Option value="none">无代理</Option>
+                    <Option value="socks5">SOCKS5</Option>
+                    <Option value="http">HTTP</Option>
+                  </Select>
+                </Form.Item>
 
-          <Title level={5} style={{ marginTop: '20px' }}>已保存连接</Title>
-          {connections.length === 0 ? (
-            <Text type="secondary">尚未保存任何连接。</Text>
-          ) : (
-            <List
-              itemLayout="horizontal"
-              dataSource={connections}
-              renderItem={(conn) => (
-                <Dropdown overlay={getContextMenu(conn)} trigger={['contextMenu']}>
-                  <List.Item
-                    onDoubleClick={() => addTab(conn)} // 双击打开新标签页
-                    style={{
-                      border: '1px solid #f0f0f0',
-                      borderRadius: '4px',
-                      marginBottom: '8px',
-                      padding: '12px',
-                      cursor: 'pointer',
-                    }}
-                  >
-                    <List.Item.Meta
-                      title={<Text strong>{conn.name}</Text>}
-                      description={`${conn.host}:${conn.port} ${conn.proxyType && conn.proxyType !== 'none' ? `(代理: ${conn.proxyType} ${conn.proxyHost}:${conn.proxyPort})` : ''}`}
-                    />
-                  </List.Item>
-                </Dropdown>
-              )}
-            />
-          )}
-        </div>
-      </Sider>
+                {proxyType !== 'none' && (
+                  <>
+                    <Form.Item
+                      name="proxyHost"
+                      label="代理主机"
+                      rules={[{ required: true, message: '请输入代理主机地址!' }]}
+                    >
+                      <Input placeholder="代理主机" />
+                    </Form.Item>
+                    <Form.Item
+                      name="proxyPort"
+                      label="代理端口"
+                      rules={[{ required: true, message: '请输入代理端口号!' }]}
+                    >
+                      <Input type="number" placeholder="代理端口" />
+                    </Form.Item>
+                  </>
+                )}
+              </Form>
+            </Modal>
 
-      {/* 调整大小手柄 */}
-      <div
-        style={{
-          width: '5px',
-          cursor: 'ew-resize',
-          backgroundColor: '#eee',
-          flexShrink: 0,
-          position: 'fixed',
-          left: sidebarWidth,
-          top: 0,
-          bottom: 0,
-          zIndex: 1,
-        }}
-        onMouseDown={startResizing}
-      ></div>
+            <Title level={5} style={{ marginTop: '20px' }}>已保存连接</Title>
+            {connections.length === 0 ? (
+              <Text type="secondary">尚未保存任何连接。</Text>
+            ) : (
+              <List
+                itemLayout="horizontal"
+                dataSource={connections}
+                renderItem={(conn) => (
+                  <Dropdown overlay={getContextMenu(conn)} trigger={['contextMenu']}>
+                    <List.Item
+                      onDoubleClick={() => addTab(conn)} // 双击打开新标签页
+                      style={{
+                        border: '1px solid #f0f0f0',
+                        borderRadius: '4px',
+                        marginBottom: '8px',
+                        padding: '12px',
+                        cursor: 'pointer',
+                      }}
+                    >
+                      <List.Item.Meta
+                        title={<Text strong>{conn.name}</Text>}
+                        description={`${conn.host}:${conn.port} ${conn.proxyType && conn.proxyType !== 'none' ? `(代理: ${conn.proxyType} ${conn.proxyHost}:${conn.proxyPort})` : ''}`}
+                      />
+                    </List.Item>
+                  </Dropdown>
+                )}
+              />
+            )}
+          </div>
 
-      <Layout style={{ marginLeft: sidebarWidth + 5 }}>
-        <Content style={{ padding: '24px', margin: 0, minHeight: 280, display: 'flex', flexDirection: 'column' }}>
-          <Tabs
-            type="editable-card"
-            onChange={activateTab}
-            activeKey={activeTabId || undefined}
-            onEdit={(targetKey, action) => {
-              if (action === 'remove' && typeof targetKey === 'string') {
-                removeTab(targetKey);
+          {/* Windows 终端连接部分 */}
+          <div style={{ padding: '20px', borderTop: '1px solid #f0f0f0', marginTop: '20px' }}>
+            <Title level={4}>Windows 终端连接</Title>
+            <Space style={{ marginBottom: '10px' }}>
+              <Button onClick={() => addPowershellTab()}>PowerShell</Button>
+              <Button onClick={() => addCmdTab()}>CMD</Button>
+            </Space>
+          </div>
+        </Sider>
+
+        {/* 调整大小手柄 */}
+        <div
+          style={{
+            width: '5px',
+            cursor: 'ew-resize',
+            backgroundColor: '#eee',
+            flexShrink: 0,
+            position: 'fixed',
+            left: sidebarWidth,
+            top: 0,
+            bottom: 0,
+            zIndex: 1,
+          }}
+          onMouseDown={startResizing}
+        ></div>
+
+        <Layout style={{ marginLeft: sidebarWidth + 5 }}>
+          <Content style={{ padding: '24px', margin: 0, minHeight: 280, display: 'flex', flexDirection: 'column' }}>
+            <Tabs
+              type="editable-card"
+              onChange={activateTab}
+              activeKey={activeTabId || undefined}
+              onEdit={(targetKey, action) => {
+                if (action === 'remove' && typeof targetKey === 'string') {
+                  removeTab(targetKey);
+                }
+              }}
+              items={tabs.map(tab => ({
+                key: tab.id,
+                label: tab.name,
+                children: (
+                  <div style={{ height: 'calc(100vh - 180px)', display: 'flex', flexDirection: 'column' }}>
+                    <Text strong>状态:</Text>
+                    <Text>{tab.status}</Text>
+                    <Dropdown
+                      overlay={(
+                        <Menu onClick={({ key }) => {
+                          if (key === 'copy') {
+                            handleCopy(tab.termInstance);
+                          } else if (key === 'paste') {
+                            handlePaste(tab.termInstance);
+                          }
+                        }}>
+                          <Menu.Item key="copy">复制</Menu.Item>
+                          <Menu.Item key="paste">粘贴</Menu.Item>
+                        </Menu>
+                      )}
+                      trigger={['contextMenu']}
+                    >
+                      <div ref={tab.terminalRef} style={{ flexGrow: 1, backgroundColor: 'black', minHeight: '300px', marginTop: '10px' }}></div>
+                    </Dropdown>
+                  </div>
+                ),
+              }))}
+              tabBarExtraContent={
+                <Button
+                  type="primary"
+                  onClick={handleConnectToSelected}
+                  disabled={!selectedConnectionId}
+                  icon={<PlayCircleOutlined />}
+                >
+                  连接到已选服务器
+                </Button>
               }
-            }}
-            items={tabs.map(tab => ({
-              key: tab.id,
-              label: tab.name,
-              children: (
-                <div style={{ height: 'calc(100vh - 180px)', display: 'flex', flexDirection: 'column' }}>
-                  <Text strong>状态:</Text>
-                  <Text>{tab.status}</Text>
-                  <div ref={tab.terminalRef} style={{ flexGrow: 1, backgroundColor: 'black', minHeight: '300px', marginTop: '10px' }}></div>
-                </div>
-              ),
-            }))}
-            tabBarExtraContent={
-              <Button
-                type="primary"
-                onClick={handleConnectToSelected}
-                disabled={!selectedConnectionId}
-                icon={<PlayCircleOutlined />}
-              >
-                连接到已选服务器
-              </Button>
-            }
-          />
-          {tabs.length === 0 && (
-            <div style={{ textAlign: 'center', padding: '50px' }}>
-              <Text type="secondary">请双击列表中的连接来打开一个终端标签页，或选择一个连接后点击“连接到已选服务器”按钮。</Text>
-            </div>
-          )}
-        </Content>
+            />
+            {tabs.length === 0 && (
+              <div style={{ textAlign: 'center', padding: '50px' }}>
+                <Text type="secondary">请双击列表中的连接来打开一个终端标签页，或选择一个连接后点击“连接到已选服务器”按钮。</Text>
+              </div>
+            )}
+          </Content>
+        </Layout>
       </Layout>
-    </Layout>
+    </AntdApp>
   );
 };
 

@@ -18,6 +18,7 @@
     "antd": "^5.27.3",
     "electron-store": "^10.1.0",
     "https-proxy-agent": "^7.0.6",
+    "iconv-lite": "^0.7.0",
     "node-ssh": "^13.2.1",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
@@ -58,6 +59,9 @@
     "win": {
       "target": "nsis",
       "icon": "./avatar.png"
+    },
+    "nsis": {
+      "license": "LICENSE"
     },
     "mac": {
       "target": "dmg",
