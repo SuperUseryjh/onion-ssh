@@ -1,6 +1,6 @@
 {
   "name": "ssh",
-  "version": "1.0.0",
+  "version": "1.0.0-beta2",
   "main": "main.js",
   "scripts": {
     "start": "electron .",
